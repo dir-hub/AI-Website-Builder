@@ -4,6 +4,7 @@ import cors from "cors";
 import { toNodeHandler } from "better-auth/node";
 import { auth } from "./lib/auth.js";
 import userRouter from "./routes/userRoutes.js";
+import projectRouter from "./routes/projectRoutes.js";
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 app.use('/api/user', userRouter);
+app.use('/api/project', projectRouter);
 
 app.listen(port, () => {
     console.log(`Server is running at http://localhost:${port}`);
