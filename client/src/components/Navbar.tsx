@@ -1,15 +1,35 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { assets } from '../assets/assets';
 import { Link, useNavigate } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { UserButton } from '@daveyplate/better-auth-ui';
 import { ChevronDown } from 'lucide-react';
+import api from '@/configs/axios';
+import { toast } from 'sonner';
 
 const Navbar = () => {
     const [menuOpen, setMenuOpen] = React.useState(false);
     const navigate = useNavigate();
+    const [credits, setCredits] = useState(0)
+
 
     const {data: session} = authClient.useSession()
+
+    const getCredits = async () => {
+        try {
+            const {data} = await api.get('/api/user/credits')
+            setCredits(data.credits)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || error.message)
+            console.log(error)
+        }
+    }
+
+    useEffect(() => {
+        if(session?.user) {
+            getCredits()
+        }
+    }, [session?.user])
     const user = session?.user
     const userInitial = user?.name?.[0] || user?.email?.[0] || 'U'
     const userLabel = user?.name || user?.email || 'Account'
@@ -34,7 +54,9 @@ const Navbar = () => {
                             Get started
                         </button>
                     ) : (
-                        <UserButton
+                        <>
+                            <button className='bg-white/10 px-5 py-1.5 text-xs sm:text-sm border text-gray-200 rounded-full'>Credits : <span className="text-indigo-300">{credits}</span></button>
+                            <UserButton
                             size="icon"
                             align="end"
                             side="bottom"
@@ -42,12 +64,12 @@ const Navbar = () => {
                             trigger={
                                 <button
                                     type="button"
-                                    className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-slate-950/75 px-3 py-2 text-sm text-white shadow-sm transition hover:bg-slate-900/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/70"
+                                    className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-slate-950/75 px-3 py-1 text-sm text-white shadow-sm transition hover:bg-slate-900/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/70"
                                 >
-                                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-500 text-xs font-semibold uppercase">
+                                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-500 text-xs font-semibold uppercase">
                                         {userInitial}
                                     </span>
-                                    <span className="hidden sm:inline truncate max-w-[8rem]">
+                                    <span className="hidden sm:inline truncate max-w-32">
                                         {userLabel}
                                     </span>
                                     <ChevronDown className="size-4" />
@@ -57,11 +79,11 @@ const Navbar = () => {
                                 trigger: { base: 'rounded-full' },
                                 content: {
                                     base: 'bg-slate-950/95 border border-white/10 shadow-xl backdrop-blur-xl',
-                                    menuItem: 'text-sm text-white hover:bg-white/10',
-                                    user: 'rounded-md bg-slate-900/85 p-3'
+                                    menuItem: 'text-sm text-white hover:bg-white/10'
                                 }
                             }}
                         />
+                        </>
                     )}
                     <button id="open-menu" className="md:hidden active:scale-90 transition" onClick={() => setMenuOpen(true)} >
                         <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16" /><path d="M4 12h16" /><path d="M4 19h16" /></svg>
@@ -70,7 +92,7 @@ const Navbar = () => {
             </nav>
             {/* Mobile Menu */}
             {menuOpen && (
-                <div className="fixed inset-0 z-[100] bg-black/60 text-white backdrop-blur flex flex-col items-center justify-center text-lg gap-8 md:hidden transition-transform duration-300">
+                <div className="fixed inset-0 z-100 bg-black/60 text-white backdrop-blur flex flex-col items-center justify-center text-lg gap-8 md:hidden transition-transform duration-300">
 
                     <Link to='/' onClick={() => setMenuOpen(false)}>Home</Link>
                     <Link to='/projects' onClick={() => setMenuOpen(false)}>My Projects</Link>

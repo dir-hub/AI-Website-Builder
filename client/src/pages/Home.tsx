@@ -1,20 +1,37 @@
+import api from '@/configs/axios';
+import { authClient } from '@/lib/auth-client';
 import { Loader2Icon } from 'lucide-react';
 import React from 'react'
+import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
 const Home = () => {
+
+  const {data: session} = authClient.useSession()
+  const navigate = useNavigate()
 
    const [input, setInput] = React.useState('');
    const [loading, setLoading] = React.useState(false);
 
    const onSubmitHandler = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    setLoading(true);
-
-    //Simulate API call
-    setTimeout(() => {
+    try {
+      if(!session?.user) {
+        return toast.error('Please login to create a project')
+      }else if(!input.trim()) {
+        return toast.error('Please provide a description for your project')
+      }
+      setLoading(true);
+      const {data} = await api.post('/api/user/project', {
+        initial_prompt: input
+      })
       setLoading(false);
-    }, 2000);
+      navigate(`/projects/${data.projectId}`)
+    } catch (error:any) {
+      setLoading(false);
+      toast.error(error?.response?.data?.message || error.message)
+      console.log(error)
+    }
   }
   return (
    
