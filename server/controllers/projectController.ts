@@ -2,13 +2,67 @@ import { Request, Response } from "express";
 import prisma from "../lib/prisma.js";
 import openai from "../configs/openai.js";
 
+const AI_MODELS = [
+    "openrouter/auto",
+    "minimax/minimax-m2.5:free",
+    "qwen/qwen3-32b:free"
+];
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+    });
+
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+        }
+    }
+};
+
+const isRateLimitError = (error: any) =>
+    error?.status === 429 || /429|rate limit|provider returned error/i.test(error?.message || "");
+
+const isFallbackableModelError = (error: any) =>
+    isRateLimitError(error) ||
+    /no endpoints found|provider unavailable|temporarily unavailable|model not found|does not exist/i.test(error?.message || "");
+
+const createChatCompletionWithFallback = async (
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    timeoutMs: number
+) => {
+    let lastError: any;
+    for (const model of AI_MODELS) {
+        try {
+            return await withTimeout(
+                openai.chat.completions.create({
+                    model,
+                    messages
+                }),
+                timeoutMs,
+                `Model request timed out for ${model}`
+            );
+        } catch (error: any) {
+            lastError = error;
+            if (isFallbackableModelError(error)) {
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw lastError || new Error("All AI models failed");
+};
+
 
 export const makeRevision = async (req: Request, res: Response) => {
     const userId = req.userId
     try {
         const { projectId } = req.params
         const normalizedProjectId = Array.isArray(projectId) ? projectId[0] : projectId
-        const {message} = req.body
+        const { message } = req.body
         const user = await prisma.user.findUnique({
             where: {
                 id: userId
@@ -17,7 +71,7 @@ export const makeRevision = async (req: Request, res: Response) => {
         if (!userId) {
             return res.status(401).json({ message: "Unauthorized" });
         }
-        
+
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
@@ -26,7 +80,7 @@ export const makeRevision = async (req: Request, res: Response) => {
             return res.status(403).json({ message: "Add more credits to create more revisions" });
         }
 
-        if(!message || message.trim() === "") {
+        if (!message || message.trim() === "") {
             return res.status(400).json({ message: "Please provide a valid prompt" });
         }
 
@@ -61,11 +115,11 @@ export const makeRevision = async (req: Request, res: Response) => {
             }
         })
 
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: "z-ai/glm-4.5-air:free",
-            messages: [
-                {
-                    role: "system", content: `
+        let enhancedPrompt = message;
+        try {
+            const promptEnhanceResponse = await createChatCompletionWithFallback([
+                    {
+                        role: "system", content: `
                     You are a prompt enhancement specialist. The user wants to make changes to their website. Enhance their request to be more specific and actionable for a web developer.
 
                     Enhance this by:
@@ -75,20 +129,29 @@ export const makeRevision = async (req: Request, res: Response) => {
                     4. Using clear technical terms
 
                     Return ONLY the enhanced request, nothing else. Keep it concise (1-2 sentences).`
-                },
-                { role: "user", content: `User's request: "${message}"` }
-            ]
-        })
+                    },
+                    { role: "user", content: `User's request: "${message}"` }
+                ], 20000)
 
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
+            enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || message;
 
-        await prisma.conversation.create({
-            data: {
-                role: "assistant",
-                content: `Enhanced prompt: ${enhancedPrompt}`,
-                projectId: normalizedProjectId
-            }
-        })
+            await prisma.conversation.create({
+                data: {
+                    role: "assistant",
+                    content: `Enhanced prompt: ${enhancedPrompt}`,
+                    projectId: normalizedProjectId
+                }
+            })
+        } catch (enhanceError: any) {
+            console.warn("Revision prompt enhancement skipped:", enhanceError?.message || enhanceError);
+            await prisma.conversation.create({
+                data: {
+                    role: "assistant",
+                    content: "Prompt enhancement is unavailable right now. Using your original revision request directly.",
+                    projectId: normalizedProjectId
+                }
+            })
+        }
 
         await prisma.conversation.create({
             data: {
@@ -98,9 +161,7 @@ export const makeRevision = async (req: Request, res: Response) => {
             }
         })
 
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: "z-ai/glm-4.5-air:free",
-            messages: [
+        const codeGenerationResponse = await createChatCompletionWithFallback([
                 {
                     role: "system", content: `
                     You are an expert web developer. 
@@ -116,10 +177,28 @@ export const makeRevision = async (req: Request, res: Response) => {
                     Apply the requested changes while maintaining the Tailwind CSS styling approach.`
                 },
                 { role: "user", content: `Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"` },
-            ]
-        })
+            ], 90000)
 
         const code = codeGenerationResponse.choices[0].message.content || '';
+
+        if (!code) {
+            await prisma.conversation.create({
+                data: {
+                    role: "assistant",
+                    content: "Unable to generate the code, please try again.",
+                    projectId: normalizedProjectId
+                }
+            })
+            await prisma.user.update({
+            where: {
+                id: userId
+            },
+            data: {
+                credits: { increment: 5 }
+            }
+        })
+        return res.status(502).json({ message: "Unable to generate website code. Credits have been refunded." });
+        }
 
         const version = await prisma.version.create({
             data: {
@@ -139,7 +218,8 @@ export const makeRevision = async (req: Request, res: Response) => {
 
         await prisma.websiteProject.update({
             where: {
-                id: normalizedProjectId},
+                id: normalizedProjectId
+            },
             data: {
                 current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
                 current_version_index: version.id
@@ -148,16 +228,25 @@ export const makeRevision = async (req: Request, res: Response) => {
 
         res.status(200).json({ message: "Changes made successfully" });
     } catch (error: any) {
-        await prisma.user.update({
-            where: {
-                id: userId
-            },
-            data: {
-                credits: { increment: 5 }
+        try {
+            if (userId) {
+                await prisma.user.update({
+                    where: {
+                        id: userId
+                    },
+                    data: {
+                        credits: { increment: 5 }
+                    }
+                })
             }
-        })
+        } catch (refundError) {
+            console.error("Credit refund failed:", refundError);
+        }
         console.error(error.message || error.code);
-        res.status(500).json({ message: error.message });
+        if (isFallbackableModelError(error)) {
+            return res.status(429).json({ message: "AI providers are busy right now. Please retry in a few seconds." });
+        }
+        return res.status(500).json({ message: error?.message || "Failed to apply revision. Please try again." });
     }
 }
 
@@ -210,7 +299,7 @@ export const rollbackToVersion = async (req: Request, res: Response) => {
         })
 
         res.status(200).json({ message: "Rolled back successfully" });
-    } catch (error : any) {
+    } catch (error: any) {
         console.error(error.message || error.code);
         res.status(500).json({ message: error.message })
     }
@@ -231,7 +320,7 @@ export const deleteProject = async (req: Request, res: Response) => {
         })
 
         res.status(200).json({ message: "Project deleted successfully" });
-    } catch (error : any) {
+    } catch (error: any) {
         console.error(error.message || error.code);
         res.status(500).json({ message: error.message })
     }
@@ -244,7 +333,7 @@ export const getProjectPreview = async (req: Request, res: Response) => {
         const { projectId } = req.params
         const normalizedProjectId = Array.isArray(projectId) ? projectId[0] : projectId
 
-        if(!userId) {
+        if (!userId) {
             return res.status(401).json({ message: "Unauthorized" });
         }
         const project = await prisma.websiteProject.findFirst({
@@ -252,20 +341,20 @@ export const getProjectPreview = async (req: Request, res: Response) => {
                 id: normalizedProjectId,
                 userId
             },
-            include:{
+            include: {
                 versions: true
             }
         })
         if (!project) {
             return res.status(404).json({ message: "Project not found" });
         }
-    
+
         res.status(200).json({ project });
-    } catch (error : any) {
+    } catch (error: any) {
         console.error(error.message || error.code);
         res.status(500).json({ message: error.message })
     }
-    
+
 }
 
 export const getPublishedProjects = async (req: Request, res: Response) => {
@@ -274,16 +363,16 @@ export const getPublishedProjects = async (req: Request, res: Response) => {
             where: {
                 isPublished: true
             },
-            include:{
+            include: {
                 user: true
             }
-        })    
+        })
         res.status(200).json({ projects });
-    } catch (error : any) {
+    } catch (error: any) {
         console.error(error.message || error.code);
         res.status(500).json({ message: error.message })
     }
-    
+
 }
 
 export const getProjectById = async (req: Request, res: Response) => {
@@ -294,16 +383,16 @@ export const getProjectById = async (req: Request, res: Response) => {
             where: {
                 id: normalizedProjectId,
             },
-        }) 
-        if (!project || project.isPublished === false || !project?.current_code) { 
-             return res.status(404).json({ message: "Project not found" });
-        } 
+        })
+        if (!project || project.isPublished === false || !project?.current_code) {
+            return res.status(404).json({ message: "Project not found" });
+        }
         res.status(200).json({ code: project.current_code });
-    } catch (error : any) {
+    } catch (error: any) {
         console.error(error.message || error.code);
         res.status(500).json({ message: error.message })
     }
-    
+
 }
 
 export const saveProjectCode = async (req: Request, res: Response) => {
@@ -317,34 +406,34 @@ export const saveProjectCode = async (req: Request, res: Response) => {
             return res.status(401).json({ message: "Unauthorized" });
         }
 
-        if(!code){
+        if (!code) {
             return res.status(400).json({ message: "Code is required" });
         }
-        
+
         const project = await prisma.websiteProject.findFirst({
             where: {
                 id: normalizedProjectId,
                 userId
             },
         })
-        if (!project) { 
-             return res.status(404).json({ message: "Project not found" });
+        if (!project) {
+            return res.status(404).json({ message: "Project not found" });
         }
 
         await prisma.websiteProject.update({
             where: {
                 id: normalizedProjectId,
             },
-            data:{
+            data: {
                 current_code: code,
                 current_version_index: ""
             }
         })
-       
+
         res.status(200).json({ message: "Project saved successfully" });
-    } catch (error : any) {
+    } catch (error: any) {
         console.error(error.message || error.code);
         res.status(500).json({ message: error.message })
     }
-    
+
 }

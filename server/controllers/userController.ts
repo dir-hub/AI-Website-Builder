@@ -2,6 +2,198 @@ import { Request, Response } from "express";
 import prisma from "../lib/prisma.js";
 import openai from "../configs/openai.js";
 
+const AI_MODELS = [
+    "openrouter/auto",
+    "minimax/minimax-m2.5:free",
+    "qwen/qwen3-32b:free"
+];
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+    });
+
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+        }
+    }
+};
+
+const isRateLimitError = (error: any) =>
+    error?.status === 429 || /429|rate limit|provider returned error/i.test(error?.message || "");
+
+const isFallbackableModelError = (error: any) =>
+    isRateLimitError(error) ||
+    /no endpoints found|provider unavailable|temporarily unavailable|model not found|does not exist/i.test(error?.message || "");
+
+const createChatCompletionWithFallback = async (
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    timeoutMs: number
+) => {
+    let lastError: any;
+    for (const model of AI_MODELS) {
+        try {
+            return await withTimeout(
+                openai.chat.completions.create({
+                    model,
+                    messages
+                }),
+                timeoutMs,
+                `Model request timed out for ${model}`
+            );
+        } catch (error: any) {
+            lastError = error;
+            if (isFallbackableModelError(error)) {
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw lastError || new Error("All AI models failed");
+};
+
+const sanitizeGeneratedCode = (code: string) =>
+    code.replace(/```[a-z]*\n?/gi, "").replace(/```$/g, "").trim();
+
+const generateProjectInBackground = async (projectId: string, userId: string, initialPrompt: string) => {
+    try {
+        let enhancedPrompt = initialPrompt;
+        try {
+            const promptEnhanceResponse = await createChatCompletionWithFallback([
+                {
+                    role: "system", content: `
+                    You are a prompt enhancement specialist. Take the user's website request and expand it into a detailed, comprehensive prompt that will help create the best possible website.
+
+                    Enhance this prompt by:
+                    1. Adding specific design details (layout, color scheme, typography)
+                    2. Specifying key sections and features
+                    3. Describing the user experience and interactions
+                    4. Including modern web design best practices
+                    5. Mentioning responsive design requirements
+                    6. Adding any missing but important elements
+
+                    Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
+                },
+                { role: "user", content: initialPrompt }
+            ], 20000)
+
+            enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || initialPrompt;
+
+            await prisma.conversation.create({
+                data: {
+                    role: "assistant",
+                    content: `Enhanced prompt: ${enhancedPrompt}`,
+                    projectId
+                }
+            })
+        } catch (enhanceError: any) {
+            console.warn("Prompt enhancement skipped:", enhanceError?.message || enhanceError);
+            await prisma.conversation.create({
+                data: {
+                    role: "assistant",
+                    content: "Prompt enhancement is unavailable right now. Using your original prompt directly.",
+                    projectId
+                }
+            })
+        }
+
+        const codeGenerationResponse = await createChatCompletionWithFallback([
+            {
+                role: "system", content: `
+                    You are an expert web developer. Create a complete, production-ready, single-page website based on this request: "${enhancedPrompt}"
+
+                    CRITICAL REQUIREMENTS:
+                    - You MUST output valid HTML ONLY.
+                    - Use Tailwind CSS for ALL styling
+                    - Include this EXACT script in the <head>: <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+                    - Use Tailwind utility classes extensively for styling, animations, and responsiveness
+                    - Make it fully functional and interactive with JavaScript in <script> tag before closing </body>
+                    - Use modern, beautiful design with great UX using Tailwind classes
+                    - Make it responsive using Tailwind responsive classes (sm:, md:, lg:, xl:)
+                    - Use Tailwind animations and transitions (animate-*, transition-*)
+                    - Include all necessary meta tags
+                    - Use Google Fonts CDN if needed for custom fonts
+                    - Use placeholder images from https://placehold.co/600x400
+                    - Use Tailwind gradient classes for beautiful backgrounds
+                    - Make sure all buttons, cards, and components use Tailwind styling
+
+                    CRITICAL HARD RULES:
+                    1. You MUST put ALL output ONLY into message.content.
+                    2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
+                    3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
+                    4. Do NOT include markdown, explanations, notes, or code fences.
+
+                    The HTML should be complete and ready to render as-is with Tailwind CSS.`
+            },
+            { role: "user", content: enhancedPrompt || " " }
+        ], 90000)
+
+        const code = codeGenerationResponse.choices[0].message.content || "";
+        if (!code) {
+            await prisma.conversation.create({
+                data: {
+                    role: "assistant",
+                    content: "Unable to generate the code, please try again.",
+                    projectId
+                }
+            })
+            await prisma.user.update({
+                where: { id: userId },
+                data: { credits: { increment: 5 } }
+            })
+            return;
+        }
+
+        const cleanedCode = sanitizeGeneratedCode(code);
+        const version = await prisma.version.create({
+            data: {
+                code: cleanedCode,
+                description: "Initial version",
+                projectId
+            }
+        })
+
+        await prisma.conversation.create({
+            data: {
+                role: "assistant",
+                content: "I've created your website. You can now preview it and request any changes.",
+                projectId
+            }
+        })
+
+        await prisma.websiteProject.update({
+            where: { id: projectId },
+            data: {
+                current_code: cleanedCode,
+                current_version_index: version.id
+            }
+        })
+    } catch (error: any) {
+        try {
+            await prisma.user.update({
+                where: { id: userId },
+                data: { credits: { increment: 5 } }
+            })
+        } catch (refundError) {
+            console.error("Credit refund failed:", refundError);
+        }
+        console.error("Background project generation failed:", error?.message || error);
+        await prisma.conversation.create({
+            data: {
+                role: "assistant",
+                content: isFallbackableModelError(error)
+                    ? "AI providers are busy right now. Credits were refunded. Please try again."
+                    : `Generation failed: ${error?.message || "Unexpected error"}. Credits were refunded.`,
+                projectId
+            }
+        })
+    }
+};
+
 export const getUserCredits = async (req: Request, res: Response) => {
     try {
         const userId = req.userId
@@ -41,7 +233,7 @@ export const createUserProject = async (req: Request, res: Response) => {
         }
         const project = await prisma.websiteProject.create({
             data: {
-                name: initial_prompt > 50 ? initial_prompt.slice(0, 47) + "..." : initial_prompt,
+                name: initial_prompt.length > 50 ? initial_prompt.slice(0, 47) + "..." : initial_prompt,
                 initial_prompt,
                 userId
             }
@@ -72,38 +264,6 @@ export const createUserProject = async (req: Request, res: Response) => {
                 credits: { decrement: 5 }
             }
         })
-        return res.status(200).json({ message: "Project created successfully", projectId: project.id });
-
-        const promptEnhanceResponse = await openai.chat.completions.create({
-            model: "z-ai/glm-4.5-air:free",
-            messages: [
-                {
-                    role: "system", content: `
-                    You are a prompt enhancement specialist. Take the user's website request and expand it into a detailed, comprehensive prompt that will help create the best possible website.
-
-                    Enhance this prompt by:
-                    1. Adding specific design details (layout, color scheme, typography)
-                    2. Specifying key sections and features
-                    3. Describing the user experience and interactions
-                    4. Including modern web design best practices
-                    5. Mentioning responsive design requirements
-                    6. Adding any missing but important elements
-
-                    Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
-                },
-                { role: "user", content: initial_prompt }
-            ]
-        })
-
-        const enhancedPrompt = promptEnhanceResponse.choices[0].message.content;
-
-        await prisma.conversation.create({
-            data: {
-                role: "assistant",
-                content: `Enhanced prompt: ${enhancedPrompt}`,
-                projectId: project.id
-            }
-        })
 
         await prisma.conversation.create({
             data: {
@@ -113,78 +273,28 @@ export const createUserProject = async (req: Request, res: Response) => {
             }
         })
 
-        const codeGenerationResponse = await openai.chat.completions.create({
-            model: "z-ai/glm-4.5-air:free",
-            messages: [
-                {
-                    role: "system", content: `
-                    You are an expert web developer. Create a complete, production-ready, single-page website based on this request: "${enhancedPrompt}"
-
-                    CRITICAL REQUIREMENTS:
-                    - You MUST output valid HTML ONLY. 
-                    - Use Tailwind CSS for ALL styling
-                    - Include this EXACT script in the <head>: <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-                    - Use Tailwind utility classes extensively for styling, animations, and responsiveness
-                    - Make it fully functional and interactive with JavaScript in <script> tag before closing </body>
-                    - Use modern, beautiful design with great UX using Tailwind classes
-                    - Make it responsive using Tailwind responsive classes (sm:, md:, lg:, xl:)
-                    - Use Tailwind animations and transitions (animate-*, transition-*)
-                    - Include all necessary meta tags
-                    - Use Google Fonts CDN if needed for custom fonts
-                    - Use placeholder images from https://placehold.co/600x400
-                    - Use Tailwind gradient classes for beautiful backgrounds
-                    - Make sure all buttons, cards, and components use Tailwind styling
-
-                    CRITICAL HARD RULES:
-                    1. You MUST put ALL output ONLY into message.content.
-                    2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
-                    3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
-                    4. Do NOT include markdown, explanations, notes, or code fences.
-
-                    The HTML should be complete and ready to render as-is with Tailwind CSS.`
-                },
-                { role: "user", content: enhancedPrompt || ' ' }
-            ]
-        })
-
-        const code = codeGenerationResponse.choices[0].message.content || '';
-
-        const version = await prisma.version.create({
-            data: {
-                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
-                description: 'Initial version',
-                projectId: project.id
-            }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: "assistant",
-                content: "I've created your website. You can now preview it and request any changes.",
-                projectId: project.id
-            }
-        })
-        
-        await prisma.websiteProject.update({
-            where: {
-                id: project.id
-            },
-            data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
-                current_version_index: version.id
-            }
-        })
+        void generateProjectInBackground(project.id, userId, initial_prompt);
+        return res.status(202).json({ message: "Project creation started", projectId: project.id });
     } catch (error: any) {
-        await prisma.user.update({
-            where: {
-                id: userId
-            },
-            data: {
-                credits: { increment: 5 }
+        try {
+            if (userId) {
+                await prisma.user.update({
+                    where: {
+                        id: userId
+                    },
+                    data: {
+                        credits: { increment: 5 }
+                    }
+                })
             }
-        })
+        } catch (refundError) {
+            console.error("Credit refund failed:", refundError);
+        }
         console.error(error);
-        res.status(500).json({ message: error.message });
+        if (isFallbackableModelError(error)) {
+            return res.status(429).json({ message: "AI providers are busy right now. Please retry in a few seconds." });
+        }
+        return res.status(500).json({ message: error?.message || "Failed to create project. Please try again." });
     }
 }
 
