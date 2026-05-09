@@ -2,28 +2,51 @@ import React, { useState } from 'react'
 import type { Project } from '../types';
 import { Loader2Icon, PlusIcon, TrashIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { dummyProjects } from '../assets/assets';
 import Footer from '../components/Footer';
+import { toast } from 'sonner';
+import api from '@/configs/axios';
+import { authClient } from '@/lib/auth-client';
 
 const MyProjects = () => {
+  const {data: session, isPending} =authClient.useSession();
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const fetchProjects = async () => {
-    setProjects(dummyProjects)
-    setTimeout(() => {
-    setLoading(false);
-    },1000);
+    try {
+      const {data} = await api.get('/api/user/projects');
+      setProjects(data.projects);
+      setLoading(false);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || error.message)
+      console.log(error);
+    }
   }
 
-  const deleteProject = async(projectId:string) =>{
-    
+  const deleteProject = async() =>{
+    if(!deleteId) return;
+    const projectId = deleteId;
+    setDeleteId(null);
+    try {
+      const {data} = await api.delete(`/api/project/${projectId}`);
+      toast.success(data.message);
+      fetchProjects();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || error.message)
+      console.log(error);
+    }
   }
 
   React.useEffect(() => {
-    fetchProjects();
-  }, []);
+    if(session?.user && !isPending){
+      fetchProjects();
+    }else if(!isPending && !session?.user){
+      navigate('/');
+      toast.error('Please login to view your projects');
+    }
+  }, [session?.user]);
   return (
     <>
       <div className='px-4 md:px-16 lg:px-24 xl:px-32'>
@@ -67,7 +90,7 @@ to-indigo-600 hover:opacity-90 active:sca1e-95 transition-all'><PlusIcon size={1
                       </div>
                     </div>
                     <div onClick={(e)=>e.stopPropagation()}>
-                      <TrashIcon className='absolute top-3 right-3 scale-0 group-hover:scale-100 bg-white p-1.5 size-7 rounded text-red-500 text-xl cursor-pointer transition-all' onClick={()=>deleteProject(project.id)}/>
+                      <TrashIcon className='absolute top-3 right-3 scale-0 group-hover:scale-100 bg-white p-1.5 size-7 rounded text-red-500 text-xl cursor-pointer transition-all' onClick={()=>setDeleteId(project.id)}/>
                     </div>
                   </div>
                   ))}
@@ -83,6 +106,24 @@ to-indigo-600 hover:opacity-90 active:sca1e-95 transition-all'><PlusIcon size={1
           )
         } 
       </div>
+
+      {deleteId && (
+          <div className='fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4'>
+              <div className='bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-200'>
+                  <h3 className='text-lg font-semibold text-white mb-2'>Delete Project?</h3>
+                  <p className='text-gray-400 text-sm mb-6'>Are you sure you want to delete this project? This action cannot be undone.</p>
+                  <div className='flex gap-3 justify-end'>
+                      <button onClick={() => setDeleteId(null)} className='px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors'>
+                          Cancel
+                      </button>
+                      <button onClick={deleteProject} className='px-4 py-2 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors'>
+                          Delete
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       <Footer />
     </>
   )

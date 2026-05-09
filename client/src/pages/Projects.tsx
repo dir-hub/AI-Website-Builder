@@ -20,7 +20,7 @@ const Projects = () => {
   const [device, setDevice] = useState<'desktop' | 'phone' | 'tablet'>('desktop');
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isSaving, _setIsSaving] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const previewRef = useRef<ProjectPreviewRef>(null);
 
@@ -28,8 +28,22 @@ const Projects = () => {
    try {
     if (showLoader) setLoading(true);
     const { data } = await api.get(`/api/user/project/${projectId}`);
+    
+    // If we were generating and we got a new version, stop generating
+    if (isGenerating && data.project.current_code && data.project.current_version_index !== project?.current_version_index) {
+      if (project && data.project.current_version_index !== project.current_version_index) {
+          setIsGenerating(false);
+      } else if (!project && data.project.current_code) {
+          setIsGenerating(false);
+      }
+    }
+    
+    // Initial load: if no code yet, we are generating
+    if (!project && !data.project.current_code) {
+      setIsGenerating(true);
+    }
+
     setProject(data.project);
-    setIsGenerating(data.project.current_code ? false : true);
    } catch (error: any) {
     toast.error(error?.response?.data?.message || error.message)
     console.error(error);
@@ -38,7 +52,19 @@ const Projects = () => {
    }
   }
   const saveProject = async () => {
-
+    if(!previewRef.current) return;
+    const code = previewRef.current.getCode();
+    if(!code) return;
+    setIsSaving(true);
+    try {
+      const { data } = await api.put(`/api/project/save/${projectId}`, { code });
+      toast.success(data.message);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || error.message)
+      console.log(error);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   const downloadCode = async () => {
@@ -58,7 +84,14 @@ const Projects = () => {
   }
 
   const togglePublish = async () =>{
-
+    try {
+      const { data } = await api.get(`/api/user/publish-toggle/${projectId}`);
+      toast.success(data.message);
+      setProject((prev)=>prev ? ({...prev, isPublished: !prev.isPublished}) : null)
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || error.message)
+      console.log(error);
+    } 
   }
 
   useEffect(() => {
@@ -72,11 +105,11 @@ const Projects = () => {
 
 
   useEffect(() => {
-    if(project && !project.current_code){
+    if(isGenerating || (project && !project.current_code)){
       const intervalId = setInterval(() => fetchProject(false), 3000);
       return () => clearInterval(intervalId);
     }
-  }, [project?.current_code, projectId, session?.user])
+  }, [project?.current_code, isGenerating, projectId, session?.user])
 
   if (loading) {
     return (

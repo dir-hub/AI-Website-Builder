@@ -57,6 +57,9 @@ const createChatCompletionWithFallback = async (
 };
 
 
+const sanitizeGeneratedCode = (code: string) =>
+    code.replace(/```[a-z]*\n?/gi, "").replace(/```$/g, "").trim();
+
 export const makeRevision = async (req: Request, res: Response) => {
     const userId = req.userId
     try {
@@ -115,9 +118,13 @@ export const makeRevision = async (req: Request, res: Response) => {
             }
         })
 
-        let enhancedPrompt = message;
-        try {
-            const promptEnhanceResponse = await createChatCompletionWithFallback([
+        res.status(202).json({ message: "Revision started" });
+
+        // Run generation in background
+        void (async () => {
+            let enhancedPrompt = message;
+            try {
+                const promptEnhanceResponse = await createChatCompletionWithFallback([
                     {
                         role: "system", content: `
                     You are a prompt enhancement specialist. The user wants to make changes to their website. Enhance their request to be more specific and actionable for a web developer.
@@ -133,120 +140,110 @@ export const makeRevision = async (req: Request, res: Response) => {
                     { role: "user", content: `User's request: "${message}"` }
                 ], 20000)
 
-            enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || message;
+                enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || message;
 
-            await prisma.conversation.create({
-                data: {
-                    role: "assistant",
-                    content: `Enhanced prompt: ${enhancedPrompt}`,
-                    projectId: normalizedProjectId
-                }
-            })
-        } catch (enhanceError: any) {
-            console.warn("Revision prompt enhancement skipped:", enhanceError?.message || enhanceError);
-            await prisma.conversation.create({
-                data: {
-                    role: "assistant",
-                    content: "Prompt enhancement is unavailable right now. Using your original revision request directly.",
-                    projectId: normalizedProjectId
-                }
-            })
-        }
-
-        await prisma.conversation.create({
-            data: {
-                role: "assistant",
-                content: 'Now generating your website...',
-                projectId: normalizedProjectId
-            }
-        })
-
-        const codeGenerationResponse = await createChatCompletionWithFallback([
-                {
-                    role: "system", content: `
-                    You are an expert web developer. 
-
-                    CRITICAL REQUIREMENTS:
-                    - Return ONLY the complete updated HTML code with the requested changes.
-                    - Use Tailwind CSS for ALL styling (NO custom CSS).
-                    - Use Tailwind utility classes for all styling changes.
-                    - Include all JavaScript in <script> tags before closing </body>
-                    - Make sure it's a complete, standalone HTML document with Tailwind CSS
-                    - Return the HTML Code Only, nothing else
-
-                    Apply the requested changes while maintaining the Tailwind CSS styling approach.`
-                },
-                { role: "user", content: `Here is the current website code: "${currentProject.current_code}" The user wants this change: "${enhancedPrompt}"` },
-            ], 90000)
-
-        const code = codeGenerationResponse.choices[0].message.content || '';
-
-        if (!code) {
-            await prisma.conversation.create({
-                data: {
-                    role: "assistant",
-                    content: "Unable to generate the code, please try again.",
-                    projectId: normalizedProjectId
-                }
-            })
-            await prisma.user.update({
-            where: {
-                id: userId
-            },
-            data: {
-                credits: { increment: 5 }
-            }
-        })
-        return res.status(502).json({ message: "Unable to generate website code. Credits have been refunded." });
-        }
-
-        const version = await prisma.version.create({
-            data: {
-                code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
-                description: 'Changes made',
-                projectId: normalizedProjectId
-            }
-        })
-
-        await prisma.conversation.create({
-            data: {
-                role: "assistant",
-                content: "I've made the changes to your website. You can now preview it and request any changes.",
-                projectId: normalizedProjectId
-            }
-        })
-
-        await prisma.websiteProject.update({
-            where: {
-                id: normalizedProjectId
-            },
-            data: {
-                current_code: code.replace(/```[a-z]*\n?/gi, '').replace(/```$/g, '').trim(),
-                current_version_index: version.id
-            }
-        })
-
-        res.status(200).json({ message: "Changes made successfully" });
-    } catch (error: any) {
-        try {
-            if (userId) {
-                await prisma.user.update({
-                    where: {
-                        id: userId
-                    },
+                await prisma.conversation.create({
                     data: {
-                        credits: { increment: 5 }
+                        role: "assistant",
+                        content: `Enhanced prompt: ${enhancedPrompt}`,
+                        projectId: normalizedProjectId
+                    }
+                })
+            } catch (enhanceError: any) {
+                console.warn("Revision prompt enhancement skipped:", enhanceError?.message || enhanceError);
+                await prisma.conversation.create({
+                    data: {
+                        role: "assistant",
+                        content: "Prompt enhancement is unavailable right now. Using your original revision request directly.",
+                        projectId: normalizedProjectId
                     }
                 })
             }
-        } catch (refundError) {
-            console.error("Credit refund failed:", refundError);
-        }
-        console.error(error.message || error.code);
-        if (isFallbackableModelError(error)) {
-            return res.status(429).json({ message: "AI providers are busy right now. Please retry in a few seconds." });
-        }
-        return res.status(500).json({ message: error?.message || "Failed to apply revision. Please try again." });
+
+            try {
+                await prisma.conversation.create({
+                    data: {
+                        role: "assistant",
+                        content: 'Now generating your website...',
+                        projectId: normalizedProjectId
+                    }
+                })
+
+                const codeGenerationResponse = await createChatCompletionWithFallback([
+                    {
+                        role: "system", content: `
+                        You are an expert web developer. 
+
+                        CRITICAL REQUIREMENTS:
+                        - Return ONLY the complete updated HTML code with the requested changes.
+                        - Use Tailwind CSS for ALL styling (NO custom CSS).
+                        - Use Tailwind utility classes for all styling changes.
+                        - Include all JavaScript in <script> tags before closing </body>
+                        - Make sure it's a complete, standalone HTML document with Tailwind CSS
+                        - Return the HTML Code Only, nothing else
+
+                        Apply the requested changes while maintaining the Tailwind CSS styling approach.`
+                    },
+                    { role: "user", content: `Here is the current website code: "${currentProject.current_code || ""}" The user wants this change: "${enhancedPrompt}"` },
+            ], 90000)
+
+                const code = codeGenerationResponse.choices[0].message.content || '';
+
+                if (!code) {
+                    throw new Error("Empty code response from AI");
+                }
+
+                const cleanedCode = sanitizeGeneratedCode(code);
+
+                const version = await prisma.version.create({
+                    data: {
+                        code: cleanedCode,
+                        description: 'Changes made',
+                        projectId: normalizedProjectId
+                    }
+                })
+
+                await prisma.conversation.create({
+                    data: {
+                        role: "assistant",
+                        content: "I've made the changes to your website. You can now preview it and request any changes.",
+                        projectId: normalizedProjectId
+                    }
+                })
+
+                await prisma.websiteProject.update({
+                    where: {
+                        id: normalizedProjectId
+                    },
+                    data: {
+                        current_code: cleanedCode,
+                        current_version_index: version.id
+                    }
+                })
+            } catch (error: any) {
+                console.error("Revision background generation failed:", error?.message || error);
+                try {
+                    await prisma.user.update({
+                        where: { id: userId },
+                        data: { credits: { increment: 5 } }
+                    })
+                } catch (refundError) {
+                    console.error("Credit refund failed:", refundError);
+                }
+                await prisma.conversation.create({
+                    data: {
+                        role: "assistant",
+                        content: isFallbackableModelError(error)
+                            ? "AI providers are busy right now. Credits were refunded. Please try again."
+                            : `Revision failed: ${error?.message || "Unexpected error"}. Credits were refunded.`,
+                        projectId: normalizedProjectId
+                    }
+                })
+            }
+        })();
+    } catch (error: any) {
+        console.error("Revision request failed:", error.message || error.code);
+        return res.status(500).json({ message: error?.message || "Failed to start revision." });
     }
 }
 
@@ -413,7 +410,7 @@ export const saveProjectCode = async (req: Request, res: Response) => {
         const project = await prisma.websiteProject.findFirst({
             where: {
                 id: normalizedProjectId,
-                userId
+                userId: userId || ""
             },
         })
         if (!project) {
@@ -425,7 +422,7 @@ export const saveProjectCode = async (req: Request, res: Response) => {
                 id: normalizedProjectId,
             },
             data: {
-                current_code: code,
+                current_code: code || "",
                 current_version_index: ""
             }
         })
@@ -437,3 +434,4 @@ export const saveProjectCode = async (req: Request, res: Response) => {
     }
 
 }
+

@@ -2,8 +2,9 @@ import React, { useState } from 'react'
 import type { Project } from '../types';
 import { Loader2Icon, PlusIcon, TrashIcon } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { dummyProjects } from '../assets/assets';
 import Footer from '../components/Footer';
+import api from '@/configs/axios';
+import { toast } from 'sonner';
 
 const Community = () => {
   const [loading, setLoading] = useState(true);
@@ -11,14 +12,15 @@ const Community = () => {
   const navigate = useNavigate();
 
   const fetchProjects = async () => {
-    setProjects(dummyProjects)
-    setTimeout(() => {
-    setLoading(false);
-    },1000);
+    try {
+      const { data } = await api.get('/api/project/published');
+      setProjects(data.projects);
+      setLoading(false);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || error.message)
+      console.log(error);    
+    }
   }
-
-
-
   React.useEffect(() => {
     fetchProjects();
   }, []);

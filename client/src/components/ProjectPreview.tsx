@@ -2,6 +2,7 @@ import React, { forwardRef, useImperativeHandle, useRef } from 'react'
 import type { Project } from '../types';
 import { iframeScript } from '../assets/assets';
 import EditorPanel from './EditorPanel';
+import LoaderSteps from './LoaderSteps';
 
 interface ProjectPreviewProps {
     project: Project;
@@ -72,7 +73,7 @@ const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ pro
     }
 
     const injectPreview = (html: string) => {
-        if(!html) return '';
+        if(!html || html === 'loading...') return '';
         if(!showEditorPanel){
             return html;
         }
@@ -84,7 +85,11 @@ const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ pro
     }
   return (
     <div className='relative h-full bg-gray-900 flex-1 rounded-xl overflow-hidden max-sm:ml-2'>
-      {project.current_code ? (
+      {isGenerating ? (
+        <div className='flex items-center justify-center h-full bg-gray-950'>
+            <LoaderSteps />
+        </div>
+      ) : project.current_code ? (
         <>
         <iframe ref={iframeRef} srcDoc={injectPreview(project.current_code)} className={`h-full max-sm:w-full ${resolutions[device]} mx-auto transition-all`}/>
         {showEditorPanel && selectedElement && (
@@ -96,8 +101,10 @@ const ProjectPreview = forwardRef<ProjectPreviewRef, ProjectPreviewProps>(({ pro
             }}/>
 )}
         </>
-    ): isGenerating &&(
-        <div>loading...</div>
+    ) : (
+        <div className='flex items-center justify-center h-full'>
+            <p className='text-gray-400 animate-pulse'>Loading preview...</p>
+        </div>
     )}
     </div>
   )
