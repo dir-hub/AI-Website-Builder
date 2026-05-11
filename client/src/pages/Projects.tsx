@@ -13,8 +13,18 @@ const Projects = () => {
   const navigate = useNavigate();
   const {data: session, isPending} = authClient.useSession();
 
+  const [credits, setCredits] = useState<number>(0);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const getCredits = async () => {
+    try {
+      const { data } = await api.get('/api/user/credits')
+      setCredits(data.credits)
+    } catch (error: any) {
+      console.log(error)
+    }
+  }
 
   const [isGenerating, setIsGenerating] = useState(true);
   const [device, setDevice] = useState<'desktop' | 'phone' | 'tablet'>('desktop');
@@ -97,6 +107,7 @@ const Projects = () => {
   useEffect(() => {
     if(session?.user){
       fetchProject(true);
+      getCredits();
     }else if(!isPending && !session?.user){
       navigate('/');
       toast.error('You need to be logged in to access this page');
@@ -106,7 +117,10 @@ const Projects = () => {
 
   useEffect(() => {
     if(isGenerating || (project && !project.current_code)){
-      const intervalId = setInterval(() => fetchProject(false), 3000);
+      const intervalId = setInterval(() => {
+        fetchProject(false);
+        getCredits();
+      }, 3000);
       return () => clearInterval(intervalId);
     }
   }, [project?.current_code, isGenerating, projectId, session?.user])
@@ -135,13 +149,14 @@ const Projects = () => {
             {isMenuOpen ? <MessageSquareIcon onClick={() => setIsMenuOpen(false)} className='size-6 cursor-pointer' />
               : <XIcon className='size-6 cursor-pointer' onClick={() => setIsMenuOpen(true)} />}
           </div>
-        </div>
+        </div>      
         <div className='hidden sm:flex gap-2 bg-gray-950 p-1.5 rounded-md'>
           <SmartphoneIcon onClick={() => setDevice('phone')} className={`size-6 p-1 rounded cursor-pointer ${device === 'phone' ? 'bg-gray-700' : ''}`} />
           <TabletIcon onClick={() => setDevice('tablet')} className={`size-6 p-1 rounded cursor-pointer ${device === 'tablet' ? 'bg-gray-700' : ''}`} />
           <LaptopIcon onClick={() => setDevice('desktop')} className={`size-6 p-1 rounded cursor-pointer ${device === 'desktop' ? 'bg-gray-700' : ''}`} />
         </div>
         <div className='flex items-center justify-end gap-3 flex-1 text-xs sm:text-sm'>
+          <button className='bg-white/10 px-5 py-1.5 text-xs sm:text-sm border text-gray-200 rounded-full shrink-0 whitespace-nowrap'>Credits : <span className="text-indigo-300">{credits}</span></button>
           <button onClick={saveProject} disabled={isSaving} className='max-sm:hidden bg-gray-800 hover:bg-gray-700 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors border border-gray-700'>
             {isSaving ? <Loader2Icon className='animate-spin' size={16}/> : 
             <SaveIcon size={16} />}Save

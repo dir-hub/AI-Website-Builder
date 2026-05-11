@@ -3,9 +3,10 @@ import prisma from "../lib/prisma.js";
 import openai from "../configs/openai.js";
 
 const AI_MODELS = [
-    "openrouter/auto",
-    "minimax/minimax-m2.5:free",
-    "qwen/qwen3-32b:free"
+    "google/gemini-2.0-flash-exp:free",
+    "google/gemini-flash-1.5-8b",
+    "qwen/qwen3-32b:free",
+    "minimax/minimax-m2.5:free"
 ];
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {

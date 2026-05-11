@@ -22,7 +22,9 @@ const EditorPanel = ({ selectedElement, onUpdate, onClose }: EditorPanelProps) =
     const [values, setValues] = React.useState(selectedElement)
 
     const normalizeColorForInput = (color?: string) => {
-        if (!color || color === "transparent" || color === "rgba(0,0,0,0)" || color === "rbga(0,0,0,0)") {
+        if (!color) return "#ffffff";
+        const cleanColor = color.replace(/\s/g, "").toLowerCase();
+        if (cleanColor === "transparent" || cleanColor === "rgba(0,0,0,0)" || cleanColor === "rbga(0,0,0,0)") {
             return "#ffffff";
         }
 
@@ -32,7 +34,10 @@ const EditorPanel = ({ selectedElement, onUpdate, onClose }: EditorPanelProps) =
 
         const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
         if (rgbMatch) {
-            const toHex = (value: string) => Number(value).toString(16).padStart(2, "0");
+            const toHex = (value: string) => {
+                const hex = Number(value).toString(16);
+                return hex.length === 1 ? "0" + hex : hex;
+            };
             return `#${toHex(rgbMatch[1])}${toHex(rgbMatch[2])}${toHex(rgbMatch[3])}`;
         }
 
@@ -99,15 +104,15 @@ const EditorPanel = ({ selectedElement, onUpdate, onClose }: EditorPanelProps) =
                     <div>
                         <label className='block text-xs font-medium text-gray-500 mb-1'>Background</label>
                         <div className='flex items-center gap-2 border border-gray-400 rounded-md p-1'>
-                            <input type='color' value={normalizeColorForInput(values.style.backgroundColor)} onChange={(e) => handleStyleChange('backgroundColor', e.target.value)} className='w-6 h-6 cursor-pointer' />
-                            <span className='text-xs text-gray-60 truncate'>{values.style.backgroundColor}</span>
+                            <input type='color' value={normalizeColorForInput(values.style.backgroundColor)} onChange={(e) => handleStyleChange('backgroundColor', e.target.value)} className='w-6 h-6 cursor-pointer border-none bg-transparent shrink-0' />
+                            <input type='text' value={values.style.backgroundColor} onChange={(e) => handleStyleChange('backgroundColor', e.target.value)} className='text-xs text-gray-600 w-full bg-transparent outline-none truncate' />
                         </div>
                     </div>
                     <div>
                         <label className='block text-xs font-medium text-gray-500 mb-1'>Text Color</label>
                         <div className='flex items-center gap-2 border border-gray-400 rounded-md p-1'>
-                            <input type='color' value={normalizeColorForInput(values.style.color)} onChange={(e) => handleStyleChange('color', e.target.value)} className='w-6 h-6 cursor-pointer' />
-                            <span className='text-xs text-gray-60 truncate'>{values.style.color}</span>
+                            <input type='color' value={normalizeColorForInput(values.style.color)} onChange={(e) => handleStyleChange('color', e.target.value)} className='w-6 h-6 cursor-pointer border-none bg-transparent shrink-0' />
+                            <input type='text' value={values.style.color} onChange={(e) => handleStyleChange('color', e.target.value)} className='text-xs text-gray-600 w-full bg-transparent outline-none truncate' />
                         </div>
                     </div>
                 </div>
