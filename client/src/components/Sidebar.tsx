@@ -18,16 +18,6 @@ const Sidebar = ({ isMenuOpen, project, setProject, isGenerating, setIsGeneratin
     const [input, setInput] = React.useState('');
     const [rollbackId, setRollbackId] = React.useState<string | null>(null);
 
-    const fetchProject = async () => {
-        try {
-            const { data } = await api.get(`/api/user/project/${project.id}`);
-            setProject(data.project);
-        } catch (error: any) {
-            toast.error(error?.response?.data?.message || error.message);
-            console.log(error);
-        }
-    }
-
     const handleRollback = async () => {
         if (!rollbackId) return;
         const versionId = rollbackId;
