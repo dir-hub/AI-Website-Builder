@@ -81,7 +81,7 @@ const generateProjectInBackground = async (projectId: string, userId: string, in
                     Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
                 },
                 { role: "user", content: initialPrompt }
-            ], 20000)
+            ], 20000) as any;
 
             enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || initialPrompt;
 
@@ -132,7 +132,7 @@ const generateProjectInBackground = async (projectId: string, userId: string, in
                     The HTML should be complete and ready to render as-is with Tailwind CSS.`
             },
             { role: "user", content: enhancedPrompt || " " }
-        ], 90000)
+        ], 90000) as any;
 
         const code = codeGenerationResponse.choices[0].message.content || "";
         if (!code) {

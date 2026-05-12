@@ -139,7 +139,7 @@ export const makeRevision = async (req: Request, res: Response) => {
                     Return ONLY the enhanced request, nothing else. Keep it concise (1-2 sentences).`
                     },
                     { role: "user", content: `User's request: "${message}"` }
-                ], 20000)
+                ], 20000) as any;
 
                 enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || message;
 
@@ -186,7 +186,7 @@ export const makeRevision = async (req: Request, res: Response) => {
                         Apply the requested changes while maintaining the Tailwind CSS styling approach.`
                     },
                     { role: "user", content: `Here is the current website code: "${currentProject.current_code || ""}" The user wants this change: "${enhancedPrompt}"` },
-            ], 90000)
+            ], 90000) as any;
 
                 const code = codeGenerationResponse.choices[0].message.content || '';
 
