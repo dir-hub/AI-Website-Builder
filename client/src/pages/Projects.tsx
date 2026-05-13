@@ -191,8 +191,8 @@ const Projects = () => {
           <TabletIcon onClick={() => setDevice('tablet')} className={`size-6 p-1 rounded cursor-pointer ${device === 'tablet' ? 'bg-gray-700' : ''}`} />
           <LaptopIcon onClick={() => setDevice('desktop')} className={`size-6 p-1 rounded cursor-pointer ${device === 'desktop' ? 'bg-gray-700' : ''}`} />
         </div>
-        <div className='flex items-center justify-end gap-3 flex-1 text-xs sm:text-sm'>
-          <button className='bg-white/10 px-5 py-1.5 text-xs sm:text-sm border text-gray-200 rounded-full shrink-0 whitespace-nowrap'>Credits : <span className="text-indigo-300">{credits}</span></button>
+        <div className='flex items-center justify-end gap-3 flex-1 text-xs sm:text-sm max-sm:justify-center'>
+          <button className='bg-white/10 px-5 py-1.5 text-xs sm:text-sm border text-gray-200 rounded-full shrink-0 whitespace-nowrap max-sm:hidden'>Credits : <span className="text-indigo-300">{credits}</span></button>
           <button onClick={saveProject} disabled={isSaving} className='max-sm:hidden bg-gray-800 hover:bg-gray-700 text-white px-3.5 py-1 flex items-center gap-2 rounded sm:rounded-sm transition-colors border border-gray-700'>
             {isSaving ? <Loader2Icon className='animate-spin' size={16}/> : 
             <SaveIcon size={16} />}Save

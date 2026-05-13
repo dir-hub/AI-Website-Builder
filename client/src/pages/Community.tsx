@@ -5,10 +5,12 @@ import { Link } from 'react-router-dom';
 import Footer from '../components/Footer';
 import api from '@/configs/axios';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 
 const Community = () => {
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
+  const navigate = useNavigate();
 
   const fetchProjects = async () => {
     try {
@@ -72,8 +74,8 @@ const Community = () => {
             </div>
           ) : (
             <div className='flex flex-col items-center justify-center h-[80vh]'>
-              <h1 className='text-3xl font-semibold text-gray-300'>You have no projects yet!</h1>
-              <button className='text-white px-5 py-2 mt-5 rounded-md bg-indigo-500 hover:bg-indigo-600 active:scale-95 transition-all'>
+              <h1 className='text-3xl font-semibold text-gray-300'>No Projects Published Yet!</h1>
+              <button onClick={() => navigate('/')} className='text-white px-5 py-2 mt-5 rounded-md bg-indigo-500 hover:bg-indigo-600 active:scale-95 transition-all'>
                 Create New
               </button>
             </div>
