@@ -1,65 +1,7 @@
 import { Request, Response } from "express";
 import prisma from "../lib/prisma.js";
-import openai from "../configs/openai.js";
+import { createChatCompletionWithFallback, isFallbackableModelError, sanitizeGeneratedCode } from "../lib/ai.js";
 import Stripe from "stripe";
-
-const AI_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemini-flash-1.5-8b",
-    "qwen/qwen3-32b:free",
-    "minimax/minimax-m2.5:free"
-];
-
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
-    let timeoutHandle: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
-    });
-
-    try {
-        return await Promise.race([promise, timeoutPromise]);
-    } finally {
-        if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-        }
-    }
-};
-
-const isRateLimitError = (error: any) =>
-    error?.status === 429 || /429|rate limit|provider returned error/i.test(error?.message || "");
-
-const isFallbackableModelError = (error: any) =>
-    isRateLimitError(error) ||
-    /no endpoints found|provider unavailable|temporarily unavailable|model not found|does not exist/i.test(error?.message || "");
-
-const createChatCompletionWithFallback = async (
-    messages: { role: "system" | "user" | "assistant"; content: string }[],
-    timeoutMs: number
-) => {
-    let lastError: any;
-    for (const model of AI_MODELS) {
-        try {
-            return await withTimeout(
-                openai.chat.completions.create({
-                    model,
-                    messages
-                }),
-                timeoutMs,
-                `Model request timed out for ${model}`
-            );
-        } catch (error: any) {
-            lastError = error;
-            if (isFallbackableModelError(error)) {
-                continue;
-            }
-            throw error;
-        }
-    }
-    throw lastError || new Error("All AI models failed");
-};
-
-const sanitizeGeneratedCode = (code: string) =>
-    code.replace(/```[a-z]*\n?/gi, "").replace(/```$/g, "").trim();
 
 const generateProjectInBackground = async (projectId: string, userId: string, initialPrompt: string) => {
     try {
@@ -81,9 +23,13 @@ const generateProjectInBackground = async (projectId: string, userId: string, in
                     Return ONLY the enhanced prompt, nothing else. Make it detailed but concise (2-3 paragraphs max).`
                 },
                 { role: "user", content: initialPrompt }
-            ], 20000) as any;
+            ], 30000) as any;
 
-            enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || initialPrompt;
+            enhancedPrompt = promptEnhanceResponse?.choices?.[0]?.message?.content?.trim() || initialPrompt;
+
+            if (!promptEnhanceResponse?.choices?.[0]?.message?.content) {
+                console.warn("AI returned empty enhancement, using original prompt");
+            }
 
             await prisma.conversation.create({
                 data: {
@@ -132,25 +78,13 @@ const generateProjectInBackground = async (projectId: string, userId: string, in
                     The HTML should be complete and ready to render as-is with Tailwind CSS.`
             },
             { role: "user", content: enhancedPrompt || " " }
-        ], 90000) as any;
+        ], 120000) as any;
 
-        const code = codeGenerationResponse.choices[0].message.content || "";
-        if (!code) {
-            await prisma.conversation.create({
-                data: {
-                    role: "assistant",
-                    content: "Unable to generate the code, please try again.",
-                    projectId
-                }
-            })
-            await prisma.user.update({
-                where: { id: userId },
-                data: { credits: { increment: 5 } }
-            })
-            return;
+        const cleanedCode = sanitizeGeneratedCode(codeGenerationResponse?.choices?.[0]?.message?.content || "");
+
+        if (!cleanedCode) {
+            throw new Error("AI returned empty code. Please try again.");
         }
-
-        const cleanedCode = sanitizeGeneratedCode(code);
         const version = await prisma.version.create({
             data: {
                 code: cleanedCode,

@@ -1,65 +1,6 @@
 import { Request, Response } from "express";
 import prisma from "../lib/prisma.js";
-import openai from "../configs/openai.js";
-
-const AI_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemini-flash-1.5-8b",
-    "qwen/qwen3-32b:free",
-    "minimax/minimax-m2.5:free"
-];
-
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
-    let timeoutHandle: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
-    });
-
-    try {
-        return await Promise.race([promise, timeoutPromise]);
-    } finally {
-        if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-        }
-    }
-};
-
-const isRateLimitError = (error: any) =>
-    error?.status === 429 || /429|rate limit|provider returned error/i.test(error?.message || "");
-
-const isFallbackableModelError = (error: any) =>
-    isRateLimitError(error) ||
-    /no endpoints found|provider unavailable|temporarily unavailable|model not found|does not exist/i.test(error?.message || "");
-
-const createChatCompletionWithFallback = async (
-    messages: { role: "system" | "user" | "assistant"; content: string }[],
-    timeoutMs: number
-) => {
-    let lastError: any;
-    for (const model of AI_MODELS) {
-        try {
-            return await withTimeout(
-                openai.chat.completions.create({
-                    model,
-                    messages
-                }),
-                timeoutMs,
-                `Model request timed out for ${model}`
-            );
-        } catch (error: any) {
-            lastError = error;
-            if (isFallbackableModelError(error)) {
-                continue;
-            }
-            throw error;
-        }
-    }
-    throw lastError || new Error("All AI models failed");
-};
-
-
-const sanitizeGeneratedCode = (code: string) =>
-    code.replace(/```[a-z]*\n?/gi, "").replace(/```$/g, "").trim();
+import { createChatCompletionWithFallback, isFallbackableModelError, sanitizeGeneratedCode } from "../lib/ai.js";
 
 export const makeRevision = async (req: Request, res: Response) => {
     const userId = req.userId
@@ -139,9 +80,13 @@ export const makeRevision = async (req: Request, res: Response) => {
                     Return ONLY the enhanced request, nothing else. Keep it concise (1-2 sentences).`
                     },
                     { role: "user", content: `User's request: "${message}"` }
-                ], 20000) as any;
+                ], 30000) as any;
 
-                enhancedPrompt = promptEnhanceResponse.choices[0].message.content?.trim() || message;
+                enhancedPrompt = promptEnhanceResponse?.choices?.[0]?.message?.content?.trim() || message;
+
+                if (!promptEnhanceResponse?.choices?.[0]?.message?.content) {
+                    console.warn("AI returned empty enhancement, using original request");
+                }
 
                 await prisma.conversation.create({
                     data: {
@@ -173,28 +118,32 @@ export const makeRevision = async (req: Request, res: Response) => {
                 const codeGenerationResponse = await createChatCompletionWithFallback([
                     {
                         role: "system", content: `
-                        You are an expert web developer. 
+                        You are an expert web developer. The user wants to update their existing website code based on this request: "${enhancedPrompt}"
 
                         CRITICAL REQUIREMENTS:
-                        - Return ONLY the complete updated HTML code with the requested changes.
-                        - Use Tailwind CSS for ALL styling (NO custom CSS).
-                        - Use Tailwind utility classes for all styling changes.
-                        - Include all JavaScript in <script> tags before closing </body>
-                        - Make sure it's a complete, standalone HTML document with Tailwind CSS
-                        - Return the HTML Code Only, nothing else
+                        - You MUST output the FULL, updated HTML ONLY.
+                        - Do NOT explain the changes or use markdown code blocks.
+                        - Use Tailwind CSS for all styling and ensure it remains functional.
+                        - Make sure all existing features still work unless the user asked to change them.
+                        - Keep the layout responsive and modern.
+                        - If you use external assets, ensure they are reliable (e.g., placehold.co for images).
 
-                        Apply the requested changes while maintaining the Tailwind CSS styling approach.`
+                        CRITICAL HARD RULES:
+                        1. You MUST put ALL output ONLY into message.content.
+                        2. You MUST NOT place anything in "reasoning", "analysis", "reasoning_details", or any hidden fields.
+                        3. You MUST NOT include internal thoughts, explanations, analysis, comments, or markdown.
+                        4. Do NOT include markdown, explanations, notes, or code fences.
+
+                        The output should be the complete, ready-to-use HTML code.`
                     },
                     { role: "user", content: `Here is the current website code: "${currentProject.current_code || ""}" The user wants this change: "${enhancedPrompt}"` },
-            ], 90000) as any;
+            ], 600000) as any;
 
-                const code = codeGenerationResponse.choices[0].message.content || '';
+                const cleanedCode = sanitizeGeneratedCode(codeGenerationResponse?.choices?.[0]?.message?.content || "");
 
-                if (!code) {
-                    throw new Error("Empty code response from AI");
+                if (!cleanedCode) {
+                    throw new Error("AI returned empty code. Please try again.");
                 }
-
-                const cleanedCode = sanitizeGeneratedCode(code);
 
                 const version = await prisma.version.create({
                     data: {

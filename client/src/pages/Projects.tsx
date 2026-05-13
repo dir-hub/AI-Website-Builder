@@ -37,23 +37,52 @@ const Projects = () => {
   const fetchProject = async (showLoader = false) => {
    try {
     if (showLoader) setLoading(true);
+    // Fetch project data
     const { data } = await api.get(`/api/user/project/${projectId}`);
     
-    // If we were generating and we got a new version, stop generating
-    if (isGenerating && data.project.current_code && data.project.current_version_index !== project?.current_version_index) {
-      if (project && data.project.current_version_index !== project.current_version_index) {
-          setIsGenerating(false);
-      } else if (!project && data.project.current_code) {
-          setIsGenerating(false);
-      }
-    }
+    // Check if we should stop generating
+    const lastMsg = data.project.conversation[data.project.conversation.length - 1];
     
-    // Initial load: if no code yet, we are generating
-    if (!project && !data.project.current_code) {
-      setIsGenerating(true);
+    // Assistant is still working if the last message is one of these "starting" messages
+    const isAssistantWorking = lastMsg?.role === 'assistant' && 
+        (lastMsg?.content === 'Now generating your website...' || 
+         lastMsg?.content.toLowerCase().startsWith('enhanced prompt:') ||
+         lastMsg?.content.toLowerCase().includes('prompt enhancement is unavailable'));
+
+    // Detect errors or failures in the conversation
+    const hasAssistantError = data.project.conversation.some((c: any) => 
+        c.role === 'assistant' && 
+        (c.content.toLowerCase().includes('failed') || 
+         c.content.toLowerCase().includes('busy') || 
+         c.content.toLowerCase().includes('error') ||
+         c.content.toLowerCase().includes('timed out'))
+    );
+
+    const isNewVersion = project && data.project.current_version_index !== project.current_version_index;
+    const isInitialLoadFinished = !project && data.project.current_code;
+
+    // Detect if a revision was just started by the user but not yet reflected in server data
+    // We check if our local state has more messages than the server
+    const isLocalAhead = project && project.conversation.length > data.project.conversation.length;
+
+    // CRITICAL LOGIC: 
+    // 1. If there's an error message, STOP loading.
+    // 2. If the AI is working (enhancing OR generating), KEEP loading.
+    // 3. If we are locally ahead (optimistic message), KEEP loading.
+    // 4. If we have a NEW version or initial load is done, STOP loading.
+    if (hasAssistantError) {
+        setIsGenerating(false);
+    } else if (isAssistantWorking || isLocalAhead) {
+        setIsGenerating(true);
+    } else if (isGenerating && (isNewVersion || isInitialLoadFinished)) {
+        setIsGenerating(false);
     }
 
-    setProject(data.project);
+    // Only update project if the server has the latest conversation or we aren't generating
+    // This prevents the "disappearing message" bug and ensures immediate state sync
+    if (!isLocalAhead || hasAssistantError || isNewVersion) {
+        setProject(data.project);
+    }
    } catch (error: any) {
     toast.error(error?.response?.data?.message || error.message)
     console.error(error);
@@ -116,14 +145,21 @@ const Projects = () => {
 
 
   useEffect(() => {
-    if(isGenerating || (project && !project.current_code)){
+    // Polling should run if:
+    // 1. We are explicitly in a generating state (isGenerating is true)
+    // 2. The project exists but has no code yet (initial creation phase)
+    // 3. We are in a project view and want to see real-time chat updates/revisions
+    const shouldPoll = session?.user && projectId;
+    
+    if (shouldPoll) {
       const intervalId = setInterval(() => {
         fetchProject(false);
-        getCredits();
+        // Only fetch credits if we're not actively generating to reduce lag
+        if (!isGenerating) getCredits();
       }, 3000);
       return () => clearInterval(intervalId);
     }
-  }, [project?.current_code, isGenerating, projectId, session?.user])
+  }, [isGenerating, projectId, session?.user, project?.current_version_index])
 
   if (loading) {
     return (
@@ -180,7 +216,7 @@ const Projects = () => {
       <div className='flex-1 flex overflow-auto'>
               <Sidebar isMenuOpen={isMenuOpen} project={project} setProject={(p)=>setProject(p)} isGenerating={isGenerating} setIsGenerating={setIsGenerating}/>
               <div className='flex-1 p-2 pl-0'>
-                <ProjectPreview ref={previewRef} project={project} device={device} isGenerating={isGenerating} />
+                <ProjectPreview ref={previewRef} project={project} device={device} isGenerating={isGenerating} showEditorPanel={!!project.current_code} />
               </div>
       </div>
     </div>

@@ -40,13 +40,40 @@ const Sidebar = ({ isMenuOpen, project, setProject, isGenerating, setIsGeneratin
         if (e) e.preventDefault();
         if (!input.trim() || isGenerating) return;
 
+        const userMessage = input;
+        setInput('');
+        
+        // Optimistically update the UI so the user sees their message immediately
+        const optimisticUserMsg: Message = {
+            id: 'temp-' + Date.now(),
+            role: 'user',
+            content: userMessage,
+            timestamp: new Date().toISOString(),
+        };
+
+        const optimisticAssistantMsg: Message = {
+            id: 'temp-ai-' + Date.now(),
+            role: 'assistant',
+            content: 'Now generating your website...',
+            timestamp: new Date(Date.now() + 100).toISOString(),
+        };
+
+        setProject({
+            ...project,
+            conversation: [...project.conversation, optimisticUserMsg, optimisticAssistantMsg]
+        });
+        
+        // Trigger loading state immediately in the parent
+        setIsGenerating(true);
+
         try {
-            setIsGenerating(true);
-            const { data } = await api.post(`/api/project/revision/${project.id}`, { message: input });
+            const { data } = await api.post(`/api/project/revision/${project.id}`, { message: userMessage });
             toast.success(data.message);
-            setInput('');
+            // Don't setIsGenerating(false) here, let the polling handle it 
+            // once the new version index is detected in Projects.tsx
         } catch (error: any) {
             setIsGenerating(false);
+            // On error, the next poll will restore the correct state from the server
             toast.error(error?.response?.data?.message || error.message);
             console.log(error);
         }
@@ -160,8 +187,8 @@ const Sidebar = ({ isMenuOpen, project, setProject, isGenerating, setIsGeneratin
                             <textarea onKeyDown={handleKeyDown} onChange={(e) => setInput(e.target.value)} value={input} rows={4} placeholder='Describe your website or request changes...' className='flex-1 p-3 rounded-xl resize-none text-sm outline-none ring ring-gray-700 focus:ring-indigo-500 bg-gray-800 text-gray-100 placeholder-gray-400 transition-all' disabled={isGenerating}></textarea>
                             <button className='absolute bottom-2.5 right-2.5 rounded-full bg-linear-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white transition-colors disabled:opacity-60' disabled={isGenerating || !input.trim()}>
                                 {isGenerating ?
-                                    <Loader2Icon className='size-7 p-1.5 animate-spin text-white' />
-                                    : <SendIcon className='size-7 p-1.5 text-white' />}
+                                    <Loader2Icon className='size-7 p-1.5 animate-spin text-white z-50' />
+                                    : <SendIcon className='size-7 p-1.5 text-white z-50' />}
                             </button>
                         </div>
                     </form>
