@@ -368,8 +368,8 @@ export const purchaseCredits = async (req: Request, res: Response) => {
 
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string)
         const session = await stripe.checkout.sessions.create({
-            success_url: `${origin}/loading`,
-            cancel_url: `${origin}`,
+            success_url: `${origin}/?payment=success`,
+            cancel_url: `${origin}/pricing`,
             line_items: [
                 {
                     price_data: {

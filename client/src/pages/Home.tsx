@@ -2,16 +2,25 @@ import api from '@/configs/axios';
 import { authClient } from '@/lib/auth-client';
 import { Loader2Icon } from 'lucide-react';
 import React from 'react'
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 const Home = () => {
 
   const { data: session } = authClient.useSession()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (searchParams.get('payment') === 'success') {
+      toast.success('Credits added successfully!')
+      // Clear the query param without refreshing
+      navigate('/', { replace: true })
+    }
+  }, [searchParams, navigate])
 
   const onSubmitHandler = async (e: React.FormEvent) => {
     e.preventDefault();
