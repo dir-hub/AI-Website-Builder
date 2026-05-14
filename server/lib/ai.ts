@@ -1,15 +1,52 @@
 import genAI from "../configs/googleAI.js";
+import OpenAI from "openai";
+import { Groq } from "groq-sdk";
 
-const AI_MODELS = [
-    "gemini-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-pro-latest"
+// Initialize additional providers
+const openRouter = process.env.OPENROUTER_API_KEY ? new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.OPENROUTER_API_KEY,
+    defaultHeaders: {
+        "HTTP-Referer": "http://localhost:3000", // Required by OpenRouter
+        "X-Title": "AI Site Builder",
+    }
+}) : null;
+
+const groq = process.env.GROQ_API_KEY ? new Groq({
+    apiKey: process.env.GROQ_API_KEY,
+}) : null;
+
+type AIProvider = 'google' | 'openrouter' | 'groq';
+
+interface ModelConfig {
+    name: string;
+    provider: AIProvider;
+}
+
+const AI_MODELS: ModelConfig[] = [
+    // === Google Direct (best to try first if you have quota) ===
+    { name: "gemini-2.5-flash", provider: 'google' },           // Fast & cheap
+    { name: "gemini-2.5-flash-lite", provider: 'google' },      // Even cheaper
+    { name: "gemini-2.5-pro", provider: 'google' },             // Best quality
+    { name: "gemini-3.1-flash-lite", provider: 'google' },      // Current stable lite
+    { name: "gemini-flash-latest", provider: 'google' },        // Alias to latest Flash
+
+    // === OpenRouter (your best fallback right now) ===
+    { name: "openrouter/auto", provider: 'openrouter' },
+    { name: "google/gemini-2.5-flash", provider: 'openrouter' },
+    { name: "google/gemini-2.5-pro", provider: 'openrouter' },
+    { name: "google/gemini-3.1-flash-lite", provider: 'openrouter' },
+    { name: "meta-llama/llama-3.3-70b-instruct", provider: 'openrouter' },
+
+    // === Groq (fast & cheap) ===
+    { name: "llama-3.3-70b-versatile", provider: 'groq' },
+    { name: "llama-3.1-8b-instant", provider: 'groq' },
 ];
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs + 10000); // Increased buffer to 10s
+        timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs + 10000);
     });
 
     try {
@@ -28,10 +65,8 @@ export const isFallbackableModelError = (error: any) => {
     console.error("AI Error details:", {
         message: error?.message,
         status: status,
-        stack: error?.stack
     });
 
-    // Do NOT fallback on authentication or permission errors
     if (
         message.includes("api_key") || 
         message.includes("unauthorized") || 
@@ -61,82 +96,88 @@ export const createChatCompletionWithFallback = async (
     timeoutMs: number
 ) => {
     let lastError: any;
-    
-    // Extract system message
-    const systemMessage = messages.find(m => m.role === "system")?.content || "";
-    
-    // Filter out system messages and format history
-    const history = messages
-        .filter(m => m.role !== "system")
-        .map(m => ({
-            role: m.role === "assistant" ? "model" : "user",
-            parts: [{ text: m.content }]
-        }));
 
-    if (history.length === 0) {
-        throw new Error("No user messages provided for AI completion");
-    }
-
-    // The last message is the current user prompt
-    const userPrompt = history.pop()?.parts[0].text || "";
-
-    for (const modelName of AI_MODELS) {
+    for (const modelConfig of AI_MODELS) {
         try {
-            console.log(`Trying AI Model: ${modelName}`);
-            
-            // In some versions of the SDK, systemInstruction is passed in the model config
-            // We use a more compatible approach by prepending it to the prompt if needed,
-            // but first we try the official way.
-            const model = genAI.getGenerativeModel({ 
-                model: modelName,
-                systemInstruction: systemMessage ? { role: "system", parts: [{ text: systemMessage }] } : undefined
-            });
+            console.log(`Trying AI Provider: ${modelConfig.provider}, Model: ${modelConfig.name}`);
+            let text = "";
 
-            // Use generateContent instead of startChat for simpler requests
-            const request = {
-                contents: [
-                    ...history,
-                    { role: "user", parts: [{ text: userPrompt }] }
-                ]
-            };
+            if (modelConfig.provider === 'google') {
+                const systemMessage = messages.find(m => m.role === "system")?.content || "";
+                const history = messages
+                    .filter(m => m.role !== "system")
+                    .map(m => ({
+                        role: m.role === "assistant" ? "model" : "user",
+                        parts: [{ text: m.content }]
+                    }));
+                const userPrompt = history.pop()?.parts[0].text || "";
 
-            const result = await withTimeout(
-                model.generateContent(request),
-                timeoutMs,
-                `Model request timed out for ${modelName}`
-            );
+                const model = genAI.getGenerativeModel({ 
+                    model: modelConfig.name,
+                    systemInstruction: systemMessage ? { role: "system", parts: [{ text: systemMessage }] } : undefined
+                });
 
-            const response = await result.response;
-            const text = response.text();
+                const result = await withTimeout(
+                    model.generateContent({
+                        contents: [...history, { role: "user", parts: [{ text: userPrompt }] }]
+                    }),
+                    timeoutMs,
+                    `Google AI timeout for ${modelConfig.name}`
+                );
+                text = (await result.response).text();
 
-            if (!text) {
-                throw new Error(`Empty response from model ${modelName}`);
+            } else if (modelConfig.provider === 'openrouter') {
+                if (!openRouter) {
+                    console.warn("OpenRouter API Key is missing. Skipping...");
+                    continue;
+                }
+                const response = await withTimeout(
+                    openRouter.chat.completions.create({
+                        model: modelConfig.name,
+                        messages: messages.map(m => ({ role: m.role, content: m.content })),
+                    }),
+                    timeoutMs,
+                    `OpenRouter timeout for ${modelConfig.name}`
+                );
+                text = response.choices[0]?.message?.content || "";
+
+            } else if (modelConfig.provider === 'groq') {
+                if (!groq) {
+                    console.warn("Groq API Key is missing. Skipping...");
+                    continue;
+                }
+                const response = await withTimeout(
+                    groq.chat.completions.create({
+                        model: modelConfig.name,
+                        messages: messages.map(m => ({ role: m.role, content: m.content })),
+                    }),
+                    timeoutMs,
+                    `Groq timeout for ${modelConfig.name}`
+                );
+                text = response.choices[0]?.message?.content || "";
             }
 
-            return {
-                choices: [
-                    {
-                        message: {
-                            content: text
-                        }
-                    }
-                ]
-            };
+            if (!text) {
+                console.warn(`Model ${modelConfig.name} returned empty text. Trying next...`);
+                continue;
+            }
+
+            return { choices: [{ message: { content: text } }] };
+
         } catch (error: any) {
             lastError = error;
+            console.error(`Error with ${modelConfig.provider}/${modelConfig.name}:`, error.message);
             
-            // Log the specific error for debugging
-            console.error(`Error with model ${modelName}:`, error.message);
-
-            if (isFallbackableModelError(error)) {
-                console.warn(`Fallback triggered for model ${modelName}:`, error?.message || error);
-                await new Promise(resolve => setTimeout(resolve, 2000));
+            // If it's a 404, we should also try to fallback because model names might differ between regions/versions
+            if (isFallbackableModelError(error) || error?.status === 404) {
+                console.warn(`Falling back from ${modelConfig.name} due to error: ${error.message}`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 continue;
             }
             throw error;
         }
     }
-    throw lastError || new Error("All AI models failed");
+    throw lastError || new Error("All AI providers and models failed to generate content.");
 };
 
 export const sanitizeGeneratedCode = (code: string) =>
