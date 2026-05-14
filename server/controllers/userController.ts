@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import prisma from "../lib/prisma.js";
 import { createChatCompletionWithFallback, isFallbackableModelError, sanitizeGeneratedCode } from "../lib/ai.js";
 import Stripe from "stripe";
+import { waitUntil } from "@vercel/functions";
 
 const generateProjectInBackground = async (projectId: string, userId: string, initialPrompt: string) => {
     try {
@@ -209,7 +210,12 @@ export const createUserProject = async (req: Request, res: Response) => {
             }
         })
 
-        void generateProjectInBackground(project.id, userId, initial_prompt);
+        if (process.env.NODE_ENV === 'production') {
+            waitUntil(generateProjectInBackground(project.id, userId, initial_prompt));
+        } else {
+            void generateProjectInBackground(project.id, userId, initial_prompt);
+        }
+        
         return res.status(202).json({ message: "Project creation started", projectId: project.id });
     } catch (error: any) {
         try {

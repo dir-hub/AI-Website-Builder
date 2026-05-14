@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import prisma from "../lib/prisma.js";
 import { createChatCompletionWithFallback, isFallbackableModelError, sanitizeGeneratedCode } from "../lib/ai.js";
+import { waitUntil } from "@vercel/functions";
 
 export const makeRevision = async (req: Request, res: Response) => {
     const userId = req.userId
@@ -63,7 +64,7 @@ export const makeRevision = async (req: Request, res: Response) => {
         res.status(202).json({ message: "Revision started" });
 
         // Run generation in background
-        void (async () => {
+        const revisionTask = async () => {
             let enhancedPrompt = message;
             try {
                 const promptEnhanceResponse = await createChatCompletionWithFallback([
@@ -190,7 +191,13 @@ export const makeRevision = async (req: Request, res: Response) => {
                     }
                 })
             }
-        })();
+        };
+
+        if (process.env.NODE_ENV === 'production') {
+            waitUntil(revisionTask());
+        } else {
+            void revisionTask();
+        }
     } catch (error: any) {
         console.error("Revision request failed:", error.message || error.code);
         return res.status(500).json({ message: error?.message || "Failed to start revision." });
