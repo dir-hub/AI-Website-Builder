@@ -34,55 +34,68 @@ export const stripeWebhook = async (request: Request, response: Response) => {
   // Handle the event
   console.log(`[Stripe Webhook] Received event type: ${event.type}`);
 
+  const handleSuccessfulPayment = async (metadata: any, sessionId?: string, paymentIntentId?: string) => {
+    const transactionId = metadata?.transactionId;
+    const appId = metadata?.appId;
+    
+    console.log(`[Stripe Webhook] Processing payment. transactionId: ${transactionId}, appId: ${appId}, sessionId: ${sessionId}, pi: ${paymentIntentId}`);
+
+    if (appId === 'ai-site-builder' && transactionId) {
+      try {
+        const transaction = await prisma.transaction.findUnique({
+          where: { id: transactionId }
+        });
+
+        if (!transaction) {
+          console.error(`[Stripe Webhook] Transaction not found: ${transactionId}`);
+          return false;
+        }
+
+        if (transaction.isPaid) {
+          console.log(`[Stripe Webhook] Transaction already processed: ${transactionId}`);
+          return true;
+        }
+
+        const updatedTransaction = await prisma.transaction.update({
+          where: { id: transactionId },
+          data: { isPaid: true }
+        });
+
+        const updatedUser = await prisma.user.update({
+          where: { id: updatedTransaction.userId },
+          data: {
+            credits: {
+              increment: updatedTransaction.credits
+            }
+          }
+        });
+        
+        console.log(`[Stripe Webhook] Credits added successfully. User: ${updatedUser.id}, Added: ${updatedTransaction.credits}, New Balance: ${updatedUser.credits}`);
+        return true;
+      } catch (dbError: any) {
+        console.error(`[Stripe Webhook] Database update failed:`, dbError.message);
+        throw dbError;
+      }
+    } else {
+      console.warn(`[Stripe Webhook] App ID mismatch or missing transactionId. appId: ${appId}, transactionId: ${transactionId}`);
+      return false;
+    }
+  };
+
   switch (event.type) {
-    case 'checkout.session.completed':
+    case 'checkout.session.completed': {
       const session = event.data.object as Stripe.Checkout.Session;
       console.log(`[Stripe Webhook] Session metadata:`, session.metadata);
-
-      const transactionId = session.metadata?.transactionId;
-      const appId = session.metadata?.appId;
-      
-      console.log(`[Stripe Webhook] Payment completed for session: ${session.id}, transactionId: ${transactionId}, appId: ${appId}`);
-
-      if (appId === 'ai-site-builder' && transactionId) {
-        try {
-          const transaction = await prisma.transaction.findUnique({
-            where: { id: transactionId }
-          });
-
-          if (!transaction) {
-            console.error(`[Stripe Webhook] Transaction not found: ${transactionId}`);
-            return response.status(404).json({ error: 'Transaction not found' });
-          }
-
-          if (transaction.isPaid) {
-            console.log(`[Stripe Webhook] Transaction already processed: ${transactionId}`);
-            return response.json({ received: true, message: 'Already processed' });
-          }
-
-          const updatedTransaction = await prisma.transaction.update({
-            where: { id: transactionId },
-            data: { isPaid: true }
-          });
-
-          const updatedUser = await prisma.user.update({
-            where: { id: updatedTransaction.userId },
-            data: {
-              credits: {
-                increment: updatedTransaction.credits
-              }
-            }
-          });
-          
-          console.log(`[Stripe Webhook] Credits added successfully. User: ${updatedUser.id}, Added: ${updatedTransaction.credits}, New Balance: ${updatedUser.credits}`);
-        } catch (dbError: any) {
-          console.error(`[Stripe Webhook] Database update failed:`, dbError.message);
-          return response.status(500).json({ error: 'Database update failed', message: dbError.message });
-        }
-      } else {
-        console.warn(`[Stripe Webhook] App ID mismatch or missing transactionId. appId: ${appId}, transactionId: ${transactionId}`);
-      }
+      await handleSuccessfulPayment(session.metadata, session.id, session.payment_intent as string);
       break;
+    }
+    
+    case 'payment_intent.succeeded': {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      console.log(`[Stripe Webhook] PaymentIntent metadata:`, paymentIntent.metadata);
+      await handleSuccessfulPayment(paymentIntent.metadata, undefined, paymentIntent.id);
+      break;
+    }
     
     default:
       console.log(`Unhandled event type ${event.type}`);

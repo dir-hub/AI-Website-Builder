@@ -383,6 +383,12 @@ export const purchaseCredits = async (req: Request, res: Response) => {
                 },
             ],
             mode: 'payment',
+            payment_intent_data: {
+                metadata: {
+                    transactionId: transaction.id,
+                    appId: 'ai-site-builder',
+                },
+            },
             metadata: {
                 transactionId: transaction.id,
                 appId: 'ai-site-builder',
