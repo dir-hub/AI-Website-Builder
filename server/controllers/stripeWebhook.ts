@@ -30,36 +30,33 @@ export const stripeWebhook = async (request: Request, response: Response) => {
 
   // Handle the event
   switch (event.type) {
-    case 'payment_intent.succeeded':
-      const paymentIntent = event.data.object;
-      const sessionList = await stripe.checkout.sessions.list({
-        payment_intent: paymentIntent.id,
-      });
-      const session = sessionList.data[0];
-      const {transactionId, appId} = session.metadata as {transactionId: string, appId: string };
-      if (!session) {
-        return response.status(400).send('No session found for payment intent');
-      }
-      if(appId === 'ai-site-builder' && transactionId) {
-        const transaction = await prisma.transaction.update({
-          where: {
-            id: transactionId
-          },
-          data: {
-            isPaid: true
-          }
-        });
+    case 'checkout.session.completed':
+      const session = event.data.object as Stripe.Checkout.Session;
+      const { transactionId, appId } = session.metadata as { transactionId: string, appId: string };
+      
+      console.log(`[Stripe Webhook] Payment completed for session: ${session.id}`);
 
-        await prisma.user.update({
-          where: {
-            id: transaction.userId
-          },
-          data: {
-            credits: {
-              increment: transaction.credits
+      if (appId === 'ai-site-builder' && transactionId) {
+        try {
+          const transaction = await prisma.transaction.update({
+            where: { id: transactionId },
+            data: { isPaid: true }
+          });
+
+          await prisma.user.update({
+            where: { id: transaction.userId },
+            data: {
+              credits: {
+                increment: transaction.credits
+              }
             }
-          }
-        });
+          });
+          
+          console.log(`[Stripe Webhook] Credits added successfully for user: ${transaction.userId}`);
+        } catch (dbError) {
+          console.error(`[Stripe Webhook] Database update failed:`, dbError);
+          return response.status(500).send('Internal Server Error during database update');
+        }
       }
       break;
     

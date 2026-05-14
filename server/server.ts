@@ -9,9 +9,6 @@ import { stripeWebhook } from "./controllers/stripeWebhook.js";
 
 const app = express();
 
-// Middleware
-app.use(express.json());
-
 const port = process.env.PORT || 3000;
 const trustedOrigins =
   process.env.TRUSTED_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean) || [];
@@ -22,11 +19,14 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// Stripe Webhook (MUST be before any body parser to get raw body for signature verification)
 app.post('/api/stripe', express.raw({type: 'application/json'}), stripeWebhook);
 
-app.use('/api/auth', toNodeHandler(auth));
-
+// Regular body parsers for all other routes
 app.use(express.json({ limit: '50mb' }));
+
+app.use('/api/auth', toNodeHandler(auth));
 
 app.get('/', (req: Request, res: Response) => {
     res.send('Server is Live!');
