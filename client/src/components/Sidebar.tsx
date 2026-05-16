@@ -185,7 +185,7 @@ const Sidebar = ({ isMenuOpen, project, setProject, isGenerating, setIsGeneratin
                     <form onSubmit={handleRevisions} className='m-3 relative'>
                         <div className='flex items-center gap-2'>
                             <textarea onKeyDown={handleKeyDown} onChange={(e) => setInput(e.target.value)} value={input} rows={4} placeholder='Describe your website or request changes...' className='flex-1 p-3 rounded-xl resize-none text-sm outline-none ring ring-gray-700 focus:ring-indigo-500 bg-gray-800 text-gray-100 placeholder-gray-400 transition-all' disabled={isGenerating}></textarea>
-                            <button className='absolute bottom-2.5 right-2.5 rounded-full bg-linear-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white transition-colors disabled:opacity-60' disabled={isGenerating || !input.trim()}>
+                            <button className='absolute bottom-2.5 right-5 rounded-full bg-linear-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white transition-colors disabled:opacity-60' disabled={isGenerating || !input.trim()}>
                                 {isGenerating ?
                                     <Loader2Icon className='size-7 p-1.5 animate-spin text-white z-50' />
                                     : <SendIcon className='size-7 p-1.5 text-white z-50' />}
