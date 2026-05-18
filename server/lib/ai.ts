@@ -7,7 +7,7 @@ const openRouter = process.env.OPENROUTER_API_KEY ? new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
     defaultHeaders: {
-        "HTTP-Referer": "http://localhost:3000", // Required by OpenRouter
+        "HTTP-Referer": "http://localhost:3000", 
         "X-Title": "AI Site Builder",
     }
 }) : null;
@@ -24,21 +24,21 @@ interface ModelConfig {
 }
 
 const AI_MODELS: ModelConfig[] = [
-    // === Google Direct (best to try first if you have quota) ===
-    { name: "gemini-2.5-flash", provider: 'google' },           // Fast & cheap
-    { name: "gemini-2.5-flash-lite", provider: 'google' },      // Even cheaper
-    { name: "gemini-2.5-pro", provider: 'google' },             // Best quality
-    { name: "gemini-3.1-flash-lite", provider: 'google' },      // Current stable lite
-    { name: "gemini-flash-latest", provider: 'google' },        // Alias to latest Flash
+    
+    { name: "gemini-2.5-flash", provider: 'google' },          
+    { name: "gemini-2.5-flash-lite", provider: 'google' },      
+    { name: "gemini-2.5-pro", provider: 'google' },             
+    { name: "gemini-3.1-flash-lite", provider: 'google' },      
+    { name: "gemini-flash-latest", provider: 'google' },        
 
-    // === OpenRouter (your best fallback right now) ===
+    
     { name: "openrouter/auto", provider: 'openrouter' },
     { name: "google/gemini-2.5-flash", provider: 'openrouter' },
     { name: "google/gemini-2.5-pro", provider: 'openrouter' },
     { name: "google/gemini-3.1-flash-lite", provider: 'openrouter' },
     { name: "meta-llama/llama-3.3-70b-instruct", provider: 'openrouter' },
 
-    // === Groq (fast & cheap) ===
+    
     { name: "llama-3.3-70b-versatile", provider: 'groq' },
     { name: "llama-3.1-8b-instant", provider: 'groq' },
 ];

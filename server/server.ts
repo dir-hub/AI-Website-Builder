@@ -20,7 +20,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Stripe Webhook (MUST be before any body parser to get raw body for signature verification)
+// Stripe Webhook 
 app.post('/api/stripe', express.raw({type: '*/*'}), stripeWebhook);
 
 // Regular body parsers for all other routes
